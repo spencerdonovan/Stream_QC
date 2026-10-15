@@ -447,7 +447,7 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
         ),
         # extra bottom space for legend
         margin=dict(l=60, r=60, t=100, b=140),
-        height=520,
+        height=800,
         hovermode='x unified',
         legend=dict(
             orientation='h',
