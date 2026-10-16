@@ -35,7 +35,7 @@ mrms_25 = load_module("mrms_25", "MRMS_2.5.py")
 mrms_dl = load_module("mrms_downloader_module", "MRMS_downloader.py")
 
 
-APP_TITLE = "MRMS + SNOTEL Dashboard"
+APP_TITLE = "NEXRAD + SNOTEL Precipitation Dashboard"
 LOCAL_DATA_DIR = Path("mrms_local_archive")
 OUTPUT_MAP_PATH = Path("mrms_station_time_series_map.html")
 HOUR_STRING = "080000"
@@ -149,8 +149,7 @@ def render_summary(stations_df: pd.DataFrame, station_frames: dict):
             st.dataframe(summary_df.sort_values("station_name").reset_index(drop=True), width="stretch")
 
 
-def main():
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
+def render_mrms_dashboard():
     st.title(APP_TITLE)
     st.caption("Independent MRMS + SNOTEL app built from the existing archive and station helpers.")
 
@@ -261,6 +260,11 @@ def main():
         st.dataframe(preview_df, width="stretch")
     else:
         st.write("No station data is available to preview.")
+
+
+def main():
+    st.set_page_config(page_title=APP_TITLE, layout="wide")
+    render_mrms_dashboard()
 
 
 if __name__ == "__main__":

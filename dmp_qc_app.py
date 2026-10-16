@@ -16,8 +16,13 @@ import requests
 import streamlit as st
 from dmp_qc import check_qc_rules_all
 from ptemp_qc import render_profile_dashboard
+from mrms_streamlit_app import render_mrms_dashboard
 
-DASHBOARD_OPTIONS = ['QC Dashboard', 'Profile Temperature Dashboard']
+DASHBOARD_OPTIONS = [
+    'QC Dashboard',
+    'Profile Temperature Dashboard',
+    'NEXRAD + SNOTEL Dashboard',
+]
 
 # ********* Load region CSV ********
 df_regions = pd.read_csv("SiteList.csv")
@@ -159,25 +164,21 @@ def profile_tab_ui(show_sidebar: bool):
     render_profile_dashboard(show_sidebar)
 
 
-def render_dashboard_header(selected_dashboard: str):
-    active_style = (
-        'background-color:#0d6efd;color:#ffffff;padding:10px 14px;border-radius:8px;'
-        'text-align:center;font-weight:700;'
-    )
-    inactive_style = (
-        'background-color:#f0f2f6;color:#444444;padding:10px 14px;border-radius:8px;'
-        'text-align:center;font-weight:600;'
-    )
+def select_dashboard(dashboard: str):
+    st.session_state['dashboard_selector'] = dashboard
 
-    col1, col2 = st.columns([1, 1])
-    col1.markdown(
-        f"<div style='{active_style if selected_dashboard == DASHBOARD_OPTIONS[0] else inactive_style}'>{DASHBOARD_OPTIONS[0]}</div>",
-        unsafe_allow_html=True,
-    )
-    col2.markdown(
-        f"<div style='{active_style if selected_dashboard == DASHBOARD_OPTIONS[1] else inactive_style}'>{DASHBOARD_OPTIONS[1]}</div>",
-        unsafe_allow_html=True,
-    )
+
+def render_dashboard_header(selected_dashboard: str):
+    columns = st.columns(len(DASHBOARD_OPTIONS))
+    for column, dashboard in zip(columns, DASHBOARD_OPTIONS):
+        column.button(
+            dashboard,
+            key=f'dashboard_button_{dashboard}',
+            type='primary' if dashboard == selected_dashboard else 'secondary',
+            width='stretch',
+            on_click=select_dashboard,
+            args=(dashboard,),
+        )
 
 
 def main():
@@ -198,8 +199,10 @@ def main():
 
     if selected_dashboard == DASHBOARD_OPTIONS[0]:
         qc_tab_ui(show_sidebar=True)
-    else:
+    elif selected_dashboard == DASHBOARD_OPTIONS[1]:
         profile_tab_ui(show_sidebar=True)
+    else:
+        render_mrms_dashboard()
 
 
 if __name__ == '__main__':
