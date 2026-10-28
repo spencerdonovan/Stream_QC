@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-# -*- coding: utf-8 -*-
 """
 Created on Mon Jul 27 16:08:53 2026
 
@@ -9,51 +7,6 @@ This script interacts directly with the USDA SNOTEL REST API to pull daily preci
 values for a list of stations, calculates 24-hour differences, and maps the data back 
 to the original station table.
 """
-
-# from pathlib import Path
-# import pandas as pd
-# import requests
-# from generic_fetch import fetch_json
-
-# # File and API settings
-# SITES_PATH = Path("SiteList.csv")
-
-
-# # Baseline API parameters
-# start_date = '2026-01-01'
-# end_date = '2026-02-01'
-# elements = 'PREC::1'
-# interval = 'DAILY'
-# periodRef = 'START'
-# returnFlags = 'true'
-# returnOriginalValues = 'true'
-# returnSuspectData = 'true'
-
-
-# # Read stations
-# df_sites = pd.read_csv(SITES_PATH)
-# results = []
-
-# # Fetch data using PreparedRequest
-# for site_triplet in df_sites["stationTriplet"]:
-
-#     base_url = 'https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1/data?'
-
-#     url = f'{base_url}stationTriplets={site_triplet}&elements={elements}&duration={interval}&beginDate={start_date}&endDate={end_date}&periodRef={periodRef}&centralTendencyType=NONE&returnFlags={returnFlags}&returnOriginalValues={returnOriginalValues}&returnSuspectData={returnSuspectData}'
-
-#     data = fetch_json(url)
-#     print(f'fetching data from {start_date} to {end_date} for {site_triplet}')
-
-#     if data is not None:
-#         results.append(data)
-
-
-# # 1. Start with an empty dictionary
-# site_prec = {}
-# # 2. Loop through each station name
-# for name in df_sites['stationName']:
-#     # 3. Create a bucket INSIDE the dictionary using the name as the key
-#     site_prec[name] = []
 
 # %%
 
@@ -85,7 +38,7 @@ def SNTL_Precip(df_sites, start_date, end_date, elements, interval, periodRef, r
 
     snotel_dict = {}
 
-    # Parallel parsing loop matching your original code style
+    # Parallel parsing loop
     for (_, row), station_json in zip(df_sites.iterrows(), results):
         station_name = row['stationName']
         rows_list = []

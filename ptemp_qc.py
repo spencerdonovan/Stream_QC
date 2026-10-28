@@ -14,7 +14,8 @@ import time
 import streamlit as st
 import numpy as np
 
-# %% Map station names to AWDB station triplets.
+# %% Configuration
+# Super station options.. ones with PTEMP.
 SITE_OPTIONS = {
     'Powder Mountain': '1300:UT:SNTL',
     'Midway Valley': '626:UT:SNTL',
@@ -22,34 +23,32 @@ SITE_OPTIONS = {
     'Heavenly Valley': '518:CA:SNTL'
 }
 
-# The API query requests all PTEMP depths plus SNWD for the selected station.
+# API query requests all PTEMP depths, TOBS, plus SNWD and WTEQ for the selected station.
 ELEMENTS = 'PTEMP:*, SNWD::1, WTEQ::1, TOBS::1'
 
 
-@st.cache_data(show_spinner=False)
+# %% Data fetching and preparation
 def fetch_json(url, timeout=30, retries=3, backoff=1.5):
-    """Fetch JSON from the AWDB API with simple retry/backoff behavior."""
     for attempt in range(1, retries + 1):
         try:
             r = requests.get(url, timeout=timeout)
             if r.status_code == 200:
                 return r.json()
-            st.warning(f'HTTP {r.status_code} from API call')
-        except requests.exceptions.ReadTimeout as e:
-            st.warning(f'Read timeout (attempt {attempt}/{retries}): {e}')
+            print(f"HTTP {r.status_code} -> {url}")
         except Exception as e:
-            st.warning(f'Request failed (attempt {attempt}/{retries}): {e}')
+            print(f"Request failed (attempt {attempt}/{retries}): {e}")
 
-        # Exponential backoff between retries.
         if attempt < retries:
             sleep_time = backoff ** attempt
+            print(f"Retrying in {sleep_time:.1f} seconds...")
             time.sleep(sleep_time)
 
-    st.error('Failed to fetch data after retries.')
+    print(f"Failed to fetch after {retries} attempts -> {url}")
     return None
 
-
+# Cache the data fetching and processing to avoid repeated API calls for the same parameters.
 @st.cache_data(show_spinner=False)
+
 def build_df_dict(site_triplet, start_date, end_date, interval, elements=ELEMENTS):
     """Build a dictionary of pandas DataFrames from API response data."""
     url = (
@@ -80,9 +79,16 @@ def build_df_dict(site_triplet, start_date, end_date, interval, elements=ELEMENT
         else:
             continue
 
+        # Extract values array (list), .get [] returns an empty list if values are missing instead of raising an error.
         values = item.get('values', [])
+
+        # if an empty list is returned, skips and moves on to next row (item)
         if not values:
             continue
+
+        # # Requires the key to exist, if it is missing python raises a key error
+        # values = item['values']
+
 
         df = pd.DataFrame({
             'date': [v.get('date') for v in values],
@@ -103,9 +109,16 @@ def merge_time_series(df_dict):
         d = df.copy()
         if 'date' not in d.columns:
             continue
+        # Convert 'date' to datetime and set as index, ensuring proper sorting.
         d['date'] = pd.to_datetime(d['date'])
+        # Make sure 'value' is numeric, coercing errors to NaN (e.g., for missing or non-numeric values).
         d['value'] = pd.to_numeric(d['value'], errors='coerce')
+        # Convert PTEMP and TOBS from Fahrenheit to Celsius for all dataframes.
+        if key.startswith('PTEMP') or key == 'TOBS':
+            d['value'] = (d['value'] - 32.0) * 5.0 / 9.0
+        # Set the index to 'date' and sort it to ensure chronological order.
         d = d.set_index('date').sort_index()
+        # Only keep the 'value' column for merging; other columns can be dropped or kept as needed.
         proc[key] = d['value']
 
     if not proc:
@@ -115,6 +128,60 @@ def merge_time_series(df_dict):
     return pd.concat(proc, axis=1)
 
 
+def get_ptemp_layer_info(merged):
+    """List PTEMP columns and identify those never covered at midnight."""
+
+    # list to hold valid PTEMP_# column names.
+    ptemp_cols = []
+
+    # Check every column in the merged data table.
+    for column in merged.columns:
+        # Ignore SNWD, TOBS, WTEQ, and any other non-PTEMP columns.
+        if not column.startswith('PTEMP_'):
+            continue
+        
+        # Split at underscore and only make one split --> , 1  Take the part after the first underscore [1] and turn it into a number 'int'.
+        # For 'PTEMP_12', this makes height equal to 12.
+        try:
+            height = int(column.split('_', 1)[1])
+
+        # If the suffix is not a whole number, this is not a usable layer name.
+        except ValueError:
+            continue
+
+        # append the column name to the list of usable PTEMP layers.
+        ptemp_cols.append(column)
+
+    # This will hold PTEMP columns whose height was never reached by midnight snow.
+    never_buried = []
+
+    # Without SNWD there is no snow-depth information to compare with the layer heights.
+    if 'SNWD' not in merged.columns:
+        return ptemp_cols, never_buried
+
+    # Select only rows recorded at 00:00 and keep their SNWD values.
+    midnight_snow_depth = merged.loc[merged.index.hour == 0, 'SNWD']
+
+    # If there are no midnight readings, there is not enough information to classify layers.
+    if midnight_snow_depth.empty:
+        return ptemp_cols, never_buried
+
+    # Compare each layer's height with all available midnight snow-depth readings.
+    for column in ptemp_cols:
+        # The column name's numeric suffix is the layer height in inches.
+        height = int(column.split('_', 1)[1])
+
+        # If no midnight SNWD reading reached this height, mark the layer never buried.
+        if not (midnight_snow_depth >= height).any():
+            never_buried.append(column)
+
+    # Return both lists: all usable layers, and the subset never reached by midnight SNWD.
+    return ptemp_cols, never_buried
+
+
+
+######################### PLOTLY FIGURE BUILDING #########################
+# %% Plotting 
 def build_plotly_figure(merged, selected_layers, show_snwd, title):
     """Build the Plotly figure with SNWD on a secondary y-axis and PTEMP depth lines."""
     import plotly.graph_objects as go
@@ -123,12 +190,6 @@ def build_plotly_figure(merged, selected_layers, show_snwd, title):
     ptemp_cols = [c for c in merged.columns if c.startswith('PTEMP')]
     colors = [
         f'hsl({int(i * 137.508) % 360}, 70%, 45%)' for i in range(len(ptemp_cols))]
-
-    # Keep original data untouched; convert only for plotting.
-    merged = merged.copy()
-    temp_cols = ptemp_cols + (['TOBS'] if 'TOBS' in merged.columns else [])
-    if temp_cols:
-        merged[temp_cols] = (merged[temp_cols] - 32.0) * 5.0 / 9.0
 
     fig = go.Figure()
 
@@ -155,7 +216,7 @@ def build_plotly_figure(merged, selected_layers, show_snwd, title):
                 name='SNWD',
                 line=dict(color='black', width=2),
                 mode='lines',
-                hovertemplate='%{x|%Y-%m-%d %H:%M}: SNWD=%{y:.2f}<extra></extra>',
+                hovertemplate='%{x|%Y-%m-%d %H:%M}: SNWD=%{y:.0f} in<extra></extra>',
                 yaxis='y2'
             )
         )
@@ -246,7 +307,7 @@ def build_plotly_figure(merged, selected_layers, show_snwd, title):
                'xanchor': 'left', 'yanchor': 'top'},
         xaxis=dict(title='Date', uirevision='static'),
         yaxis=dict(title='PTEMP (°C)', uirevision='static'),
-        yaxis2=dict(title='SNWD (in)', overlaying='y',
+        yaxis2=dict(title='SNWD (in)', tickformat='.0f', overlaying='y',
                     side='right', uirevision='static'),
         hovermode='x unified',
         legend=dict(orientation='h', yanchor='top', y=-0.18,
@@ -273,11 +334,6 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
     if not ptemp_cols:
         return go.Figure()
 
-    merged = merged.copy()
-
-    # Convert PTEMP (F) -> (C)
-    merged[ptemp_cols] = (merged[ptemp_cols] - 32.0) * 5.0 / 9.0
-
     # Collect depths from PTEMP column names
     depth_pairs = []
     for c in ptemp_cols:
@@ -285,7 +341,7 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
             depth = int(c.split('_', 1)[1])
         except Exception:
             depth = None
-        if depth is not None and depth >= 0 and c in merged.columns:
+        if depth is not None and (depth >= 0 or depth == -8) and c in merged.columns:
             depth_pairs.append((c, depth))
     if not depth_pairs:
         return go.Figure()
@@ -296,12 +352,8 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
     depths = np.array([p[1] for p in depth_pairs], dtype=float)
     depths_unique = np.sort(np.unique(depths))
 
-    # Interpolation grid for a smooth vertical profile
-    if len(depths_unique) > 1:
-        min_gap = np.min(np.diff(depths_unique))
-        resolution = min(1.0, float(min_gap) / 4.0)
-    else:
-        resolution = 1.0
+    # Sample the profile every inch to show distinct vertical bands.
+    resolution = 2
 
     interp_heights = np.arange(depths_unique.min(),
                                depths_unique.max() + resolution,
@@ -384,12 +436,41 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
             ),
             xgap=0,
             ygap=0,
-            zsmooth='best',
+            zsmooth=False,  # smoothing on or off; can be 'best', 'fast', or False
             hoverongaps=False,
             hovertemplate='Height: %{y} in<br>%{x|%Y-%m-%d %H:%M}<br>PTEMP: %{z:.2f} °C<extra></extra>'
         ),
         secondary_y=False
     )
+
+    # Show each buried PTEMP temperature series over the heatmap.
+    snwd_col = 'SNWD' if 'SNWD' in merged.columns else 'SNWD::1'
+    if snwd_col in merged.columns:
+        midnight_idx = merged[merged.index.hour == 0].index
+        for col, height in depth_pairs:
+            buried_mask = pd.Series(False, index=merged.index)
+            for midnight in midnight_idx:
+                snow_depth = merged.loc[midnight, snwd_col]
+                if pd.isna(snow_depth) or snow_depth < height:
+                    continue
+                next_midnight = midnight + pd.Timedelta(hours=24)
+                in_day = (merged.index >= midnight) & (merged.index < next_midnight)
+                buried_mask.loc[in_day] = True
+
+            if buried_mask.any():
+                buried_temperatures = merged[col].where(buried_mask)
+                fig.add_trace(
+                    go.Scatter(
+                        x=merged.index,
+                        y=buried_temperatures,
+                        yaxis='y3',
+                        name=f'{col} buried temperature',
+                        mode='lines',
+                        line=dict(color='rgba(0, 0, 0, 0)', width=1),
+                        showlegend=False,
+                        hovertemplate=f'{col}: %{{y:.1f}} °C<br>%{{x|%Y-%m-%d %H:%M}}<extra></extra>'
+                    )
+                )
 
     # SNWD overlay: stays on PRIMARY y-axis (height in inches)
     if show_snwd and ('SNWD' in merged.columns or 'SNWD::1' in merged.columns):
@@ -429,7 +510,7 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
                     name='WTEQ (in SWE)',
                     mode='lines',
                     line=dict(color='deeppink', width=2),
-                    hovertemplate='%{x|%Y-%m-%d %H:%M}: WTEQ=%{y:.2f} in<extra></extra>'
+                    hovertemplate='%{x|%Y-%m-%d %H:%M}: WTEQ=%{y:.1f} in<extra></extra>'
                 ),
                 secondary_y=True  # secondary axis
             )
@@ -440,10 +521,10 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
                'xanchor': 'left', 'yanchor': 'top'},
         xaxis=dict(title='Date', type='date', uirevision='static'),
         yaxis=dict(
-            title='Height (in)',
+            title='Height (in) SNWD & PTEMP',
             autorange=False,
             # primary axis with buffer
-            range=[0, target_top + buffer_height_inches],
+            range=[min(0, depths_unique[0]), target_top + buffer_height_inches],
             tickmode='array',
             tickvals=[v for v in depths_unique if v <= target_top],
             ticktext=[str(int(v)) if float(v).is_integer() else str(v)
@@ -451,7 +532,7 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
             uirevision='static'
         ),
         # extra bottom space for legend
-        margin=dict(l=60, r=60, t=100, b=140),
+        margin=dict(l=60, r=80, t=100, b=140),
         height=800,
         hovermode='x unified',
         legend=dict(
@@ -465,7 +546,26 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
     fig.update_layout(**layout)
 
     # Secondary y-axis (WTEQ) title + range buffer (if WTEQ was plotted)
-    fig.update_yaxes(title_text="WTEQ (in SWE)", secondary_y=True)
+    fig.update_layout(
+        yaxis2=dict(
+            title_text='WTEQ (in SWE)',
+            tickformat='.1f',
+            overlaying='y',
+            side='right',
+            anchor='free',
+            position=0.96
+        ),
+        yaxis3=dict(
+            overlaying='y',
+            side='right',
+            anchor='free',
+            position=1.0,
+            visible=False,
+            showticklabels=False,
+            showgrid=False,
+            zeroline=False
+        )
+    )
     if wteq_max is not None and np.isfinite(wteq_max):
         wteq_buffer = max(0.5, round(wteq_max * 0.10, 2)
                           )  # ≥ 0.5", ~10% headroom
@@ -476,6 +576,7 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
     return fig
 
 
+# %% Streamlit dashboard
 def render_profile_dashboard(show_sidebar: bool = True):
     st.title('🌡️ PTEMP + SNWD Dashboard')
     st.markdown(
@@ -521,41 +622,13 @@ def render_profile_dashboard(show_sidebar: bool = True):
         st.warning('No valid time series could be created from the API results.')
         return
 
-    # List available PTEMP depth traces and allow user selection.
-    ptemp_cols = []
-    for c in merged.columns:
-        if not c.startswith('PTEMP'):
-            continue
-        try:
-            if int(c.split('_', 1)[1]) >= 0:
-                ptemp_cols.append(c)
-        except Exception:
-            ptemp_cols.append(c)
+    plot_data = merged
+
+    # Prepare the PTEMP layer choices for the sidebar and chart.
+    ptemp_cols, never_buried = get_ptemp_layer_info(merged)
 
     if not ptemp_cols:
         st.warning('No PTEMP series found for this station/date range. Adjust the dates or select a different station to see the vertical PTEMP heatmap.')
-
-    # Determine which PTEMP layers are ever buried (based on midnight SNWD)
-    never_buried = []
-    if 'SNWD' in merged.columns:
-        try:
-            midnight_idx = merged[merged.index.hour == 0].index.tolist()
-        except Exception:
-            midnight_idx = []
-
-        for col in ptemp_cols:
-            try:
-                h = int(col.split('_', 1)[1])
-            except Exception:
-                h = None
-            if h is None or not midnight_idx:
-                # treat as potentially buried unless we can prove otherwise
-                continue
-
-            # Check if any midnight snow depth >= sensor height
-            snw_at_midnights = merged.loc[midnight_idx, 'SNWD']
-            if not (snw_at_midnights >= h).any():
-                never_buried.append(col)
 
     if show_sidebar:
         with st.sidebar:
@@ -579,7 +652,7 @@ def render_profile_dashboard(show_sidebar: bool = True):
             # NEW: control for SWE
             show_wteq = st.checkbox("Show SWE (WTEQ)", value=True)
 
-            show_data_table = st.checkbox('Show raw data', value=False)
+            show_data_table = st.checkbox('Show data table', value=False)
     else:
         hide_never_buried = False
         selected_layers = ptemp_cols.copy()
@@ -587,13 +660,13 @@ def render_profile_dashboard(show_sidebar: bool = True):
         show_data_table = False
 
     title = f'PTEMP heights & SNWD for {station_name} ({interval})'
-    fig = build_plotly_figure(merged, selected_layers, show_snwd, title)
+    fig = build_plotly_figure(plot_data, selected_layers, show_snwd, title)
 
     # Render the Plotly figure in the app with a static key to preserve zoom/pan state.
     st.plotly_chart(fig, config={'scrollZoom': True}, key='ptemp_snwd_chart')
 
     heatmap_fig = build_heatmap_figure(
-        merged, selected_layers, show_snwd, title)
+        plot_data, selected_layers, show_snwd, title)
 
     if heatmap_fig.data:
         st.markdown('---')
@@ -602,8 +675,8 @@ def render_profile_dashboard(show_sidebar: bool = True):
                         'scrollZoom': True}, key='ptemp_heatmap_chart')
 
     if show_data_table:
-        st.subheader('Raw merged time series')
-        st.dataframe(merged)
+        st.subheader('Data Table')
+        st.dataframe(merged.round(1))
 
     st.markdown('---')
     st.markdown('### Notes')
