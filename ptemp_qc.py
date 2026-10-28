@@ -47,7 +47,7 @@ def fetch_json(url, timeout=30, retries=3, backoff=1.5):
     return None
 
 # Cache the data fetching and processing to avoid repeated API calls for the same parameters.
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 
 def build_df_dict(site_triplet, start_date, end_date, interval, elements=ELEMENTS):
     """Build a dictionary of pandas DataFrames from API response data."""
