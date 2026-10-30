@@ -567,8 +567,7 @@ def build_heatmap_figure(merged, selected_layers, show_snwd, title):
         )
     )
     if wteq_max is not None and np.isfinite(wteq_max):
-        wteq_buffer = max(0.5, round(wteq_max * 0.10, 2)
-                          )  # ≥ 0.5", ~10% headroom
+        wteq_buffer = max(1.0, round(wteq_max * 0.20, 2))
         fig.update_yaxes(autorange=False,
                          range=[0, wteq_max + wteq_buffer],
                          secondary_y=True)
