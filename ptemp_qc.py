@@ -17,6 +17,7 @@ import numpy as np
 # %% Configuration
 # Super station options.. ones with PTEMP.
 SITE_OPTIONS = {
+    'Tony Grove Lake': '828:UT:SNTL',
     'Powder Mountain': '1300:UT:SNTL',
     'Midway Valley': '626:UT:SNTL',
     'Trial Lake': '828:UT:SNTL',
