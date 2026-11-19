@@ -54,6 +54,10 @@ def fetch_json(url, timeout=30, retries=3, backoff=1.5):
 
 def build_df_dict(site_triplet, start_date, end_date, interval, elements=ELEMENTS):
     """Build a dictionary of pandas DataFrames from API response data."""
+    # Keep the existing ordinal-1 requested sensors "ELEMENTS and add ordinal-2 PTEMP for Tony Grove.
+    if site_triplet == SITE_OPTIONS['Tony Grove Lake']:
+        elements = f'{elements}, PTEMP:*:2'
+
     url = (
         'https://wcc.sc.egov.usda.gov/awdbRestApi/services/v1/data?'
         f'stationTriplets={site_triplet}&elements={elements}&duration={interval}'
@@ -76,7 +80,11 @@ def build_df_dict(site_triplet, start_date, end_date, interval, elements=ELEMENT
         # Build a unique key for each PTEMP sensor depth, but only one key for SNWD.
         if elem == 'PTEMP':
             hd = item['stationElement']['heightDepth']
-            dict_key = f'{elem}_{hd}'
+            # Keep ordinal 1 keys unchanged and tag other ordinals to prevent collisions.
+            ordinal = item['stationElement'].get('ordinal', 1)
+            ordinal_suffix = f'{ordinal}_' if ordinal != 1 else ''
+            # Previous key format, retained for reference: dict_key = f'{elem}_{hd}'
+            dict_key = f'{elem}_{ordinal_suffix}{hd}'
         elif elem in ['SNWD', 'WTEQ', 'TOBS']:
             dict_key = elem
         else:
@@ -185,7 +193,8 @@ def get_ptemp_layer_info(merged):
 
 ######################### PLOTLY FIGURE BUILDING #########################
 # %% Plotting 
-def build_plotly_figure(merged, selected_layers, show_snwd, title):
+def build_plotly_figure(merged, selected_layers, show_snwd, title,
+                        show_ordinal_2=False):
     """Build the Plotly figure with SNWD on a secondary y-axis and PTEMP depth lines."""
     import plotly.graph_objects as go
 
@@ -193,6 +202,7 @@ def build_plotly_figure(merged, selected_layers, show_snwd, title):
     ptemp_cols = [c for c in merged.columns if c.startswith('PTEMP')]
     colors = [
         f'hsl({int(i * 137.508) % 360}, 70%, 45%)' for i in range(len(ptemp_cols))]
+    color_by_col = dict(zip(ptemp_cols, colors))
 
     fig = go.Figure()
 
@@ -234,15 +244,21 @@ def build_plotly_figure(merged, selected_layers, show_snwd, title):
         max_midnight_snwd = None
 
     for i, col in enumerate(ptemp_cols):
-        if col not in selected_layers:
+        is_ordinal_2 = col.startswith('PTEMP_2_')
+        if col not in selected_layers and not (show_ordinal_2 and is_ordinal_2):
             continue
 
         series = merged[col]
         color = colors[i % len(colors)]
+        if is_ordinal_2:
+            ordinal_1_col = f"PTEMP_{col.rsplit('_', 1)[1]}"
+            color = color_by_col.get(ordinal_1_col, color)
+        line_dash = 'dot' if is_ordinal_2 else 'solid'
+        display_name = f'{col} (ordinal 2)' if is_ordinal_2 else col
 
         # Attempt to parse the sensor depth from the column name.
         try:
-            height = int(col.split('_', 1)[1])
+            height = int(col.rsplit('_', 1)[1])
         except Exception:
             height = None
 
@@ -251,8 +267,8 @@ def build_plotly_figure(merged, selected_layers, show_snwd, title):
             go.Scatter(
                 x=series.index,
                 y=series.values,
-                name=f'{col} baseline',
-                line=dict(color='lightgrey', width=1),
+                name=f'{display_name} baseline',
+                line=dict(color='lightgrey', width=1, dash=line_dash),
                 mode='lines',
                 hoverinfo='skip',
                 showlegend=False
@@ -281,9 +297,9 @@ def build_plotly_figure(merged, selected_layers, show_snwd, title):
                 go.Scatter(
                     x=colored_points.index,
                     y=colored_points.values,
-                    name=col,
-                    legendgroup=col,
-                    line=dict(color=color, width=2),
+                    name=display_name,
+                    legendgroup=display_name,
+                    line=dict(color=color, width=2, dash=line_dash),
                     mode='lines',
                     hovertemplate=f'{col}: %{{y:.2f}} °C<br>%{{x|%Y-%m-%d %H:%M}}<extra></extra>'
                 )
@@ -295,11 +311,11 @@ def build_plotly_figure(merged, selected_layers, show_snwd, title):
                 go.Scatter(
                     x=series.index,
                     y=series.values,
-                    name=col,
-                    legendgroup=col,
+                    name=display_name,
+                    legendgroup=display_name,
                     showlegend=True,
                     visible='legendonly',
-                    line=dict(color=color, width=2),
+                    line=dict(color=color, width=2, dash=line_dash),
                     mode='lines',
                     hovertemplate=f'{col}: %{{y:.2f}} °C<br>%{{x|%Y-%m-%d %H:%M}}<extra></extra>'
                 )
@@ -651,6 +667,14 @@ def render_profile_dashboard(show_sidebar: bool = True):
 
             show_snwd = st.checkbox('Show SNWD', value=True)
 
+            ordinal_2_cols = [
+                col for col in merged.columns if col.startswith('PTEMP_2_')]
+            show_ordinal_2 = False
+            if site_triplet == SITE_OPTIONS['Tony Grove Lake'] and ordinal_2_cols:
+                show_ordinal_2 = st.radio(
+                    'Ordinal 2 PTEMP layers', ['Show', 'Hide'], index=0,
+                    horizontal=True) == 'Show'
+
             # NEW: control for SWE
             show_wteq = st.checkbox("Show SWE (WTEQ)", value=True)
 
@@ -659,10 +683,16 @@ def render_profile_dashboard(show_sidebar: bool = True):
         hide_never_buried = False
         selected_layers = ptemp_cols.copy()
         show_snwd = True
+        show_ordinal_2 = (
+            site_triplet == SITE_OPTIONS['Tony Grove Lake'] and
+            any(col.startswith('PTEMP_2_') for col in merged.columns)
+        )
         show_data_table = False
 
     title = f'PTEMP heights & SNWD for {station_name} ({interval})'
-    fig = build_plotly_figure(plot_data, selected_layers, show_snwd, title)
+    fig = build_plotly_figure(
+        plot_data, selected_layers, show_snwd, title,
+        show_ordinal_2=show_ordinal_2)
 
     # Render the Plotly figure in the app with a static key to preserve zoom/pan state.
     st.plotly_chart(fig, config={'scrollZoom': True}, key='ptemp_snwd_chart')
