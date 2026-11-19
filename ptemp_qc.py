@@ -20,7 +20,7 @@ SITE_OPTIONS = {
     'Powder Mountain': '1300:UT:SNTL',
     'Midway Valley': '626:UT:SNTL',
     'Trial Lake': '828:UT:SNTL',
-    'Heavenly Valley': '518:CA:SNTL'
+    'Heavenly Valley': '518:CA:SNTL',
     'Tony Grove Lake': '823:UT:SNTL',
     'Big Flat': '339:UT:SNTL',
     'Mining Fork': '631:UT:SNTL',
