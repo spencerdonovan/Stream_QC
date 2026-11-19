@@ -17,11 +17,13 @@ import numpy as np
 # %% Configuration
 # Super station options.. ones with PTEMP.
 SITE_OPTIONS = {
-    'Tony Grove Lake': '828:UT:SNTL',
     'Powder Mountain': '1300:UT:SNTL',
     'Midway Valley': '626:UT:SNTL',
     'Trial Lake': '828:UT:SNTL',
     'Heavenly Valley': '518:CA:SNTL'
+    'Tony Grove Lake': '823:UT:SNTL',
+    'Big Flat': '339:UT:SNTL',
+    'Mining Fork': '631:UT:SNTL',
 }
 
 # API query requests all PTEMP depths, TOBS, plus SNWD and WTEQ for the selected station.
