@@ -24,6 +24,7 @@ SITE_OPTIONS = {
     'Tony Grove Lake': '823:UT:SNTL',
     'Big Flat': '339:UT:SNTL',
     'Mining Fork': '631:UT:SNTL',
+    'CSS Lab': '428:CA:SNTL',
 }
 
 # API query requests all PTEMP depths, TOBS, plus SNWD and WTEQ for the selected station.
